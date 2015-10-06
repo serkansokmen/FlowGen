@@ -17,6 +17,42 @@ void ofApp::setup(){
     opticalFlow.setup(flowWidth, flowHeight);
     velocityMask.setup(drawWidth, drawHeight);
     
+    // enable depth->video image calibration
+    kinect.setRegistration(true);
+    
+    kinect.init();
+    //kinect.init(true); // shows infrared instead of RGB video image
+    //kinect.init(false, false); // disable video image (faster fps)
+    
+    kinect.open();		// opens first available kinect
+    //kinect.open(1);	// open a kinect by id, starting with 0 (sorted by serial # lexicographically))
+    //kinect.open("A00362A08602047A");	// open a kinect using it's unique serial #
+
+    // print the intrinsic IR sensor values
+    if(kinect.isConnected()) {
+        ofLogNotice() << "sensor-emitter dist: " << kinect.getSensorEmitterDistance() << "cm";
+        ofLogNotice() << "sensor-camera dist:  " << kinect.getSensorCameraDistance() << "cm";
+        ofLogNotice() << "zero plane pixel size: " << kinect.getZeroPlanePixelSize() << "mm";
+        ofLogNotice() << "zero plane dist: " << kinect.getZeroPlaneDistance() << "mm";
+    }
+    didCamUpdate = false;
+    cameraFbo.allocate(kinect.getWidth(), kinect.getHeight());
+    cameraFbo.clear();
+    
+    // Allocate images
+    colorImg.allocate(kinect.width, kinect.height, OF_IMAGE_COLOR);
+    grayImage.allocate(kinect.width, kinect.height, OF_IMAGE_GRAYSCALE);
+    grayThreshNear.allocate(kinect.width, kinect.height, OF_IMAGE_GRAYSCALE);
+    grayThreshFar.allocate(kinect.width, kinect.height, OF_IMAGE_GRAYSCALE);
+    grayPreprocImage.allocate(kinect.width, kinect.height, OF_IMAGE_GRAYSCALE);
+    
+    // Configure contour finder
+    contourFinder.setMinAreaRadius(10);
+    contourFinder.setMaxAreaRadius(200);
+    contourFinder.setFindHoles(false);
+    
+
+    
     // FLUID & PARTICLES
 #ifdef USE_FASTER_INTERNAL_FORMATS
     fluidSimulation.setup(flowWidth, flowHeight, drawWidth, drawHeight, true);
@@ -39,12 +75,6 @@ void ofApp::setup(){
     // MOUSE DRAW
     mouseForces.setup(flowWidth, flowHeight, drawWidth, drawHeight);
     
-    // CAMERA
-    simpleCam.setup(640, 480, true);
-    didCamUpdate = false;
-    cameraFbo.allocate(640, 480);
-    cameraFbo.clear();
-    
     // GUI
     setupGui();
     
@@ -64,7 +94,9 @@ void ofApp::setupGui() {
     doFullScreen.addListener(this, &ofApp::setFullScreen);
     gui.add(toggleGuiDraw.set("show gui (G)", false));
     gui.add(doFlipCamera.set("flip camera", true));
+    gui.add(showObstacle.set("show obstacle", true));
     gui.add(doDrawCamBackground.set("draw camera (C)", true));
+    
     gui.add(drawMode.set("draw mode", DRAW_COMPOSITE, DRAW_COMPOSITE, DRAW_MOUSE));
     drawMode.addListener(this, &ofApp::drawModeSetName);
     gui.add(drawName.set("MODE", "draw name"));
@@ -108,8 +140,18 @@ void ofApp::setupGui() {
     guiColorSwitch = 1 - guiColorSwitch;
     gui.add(mouseForces.rightButtonParameters);
     
+    
+    kinectParameters.setName("input source");
+    kinectParameters.add(nearThreshold.set("near threshold", 230, 0, 500));
+    kinectParameters.add(farThreshold.set("near threshold", 220, 0, 500));
+    
+    gui.setDefaultHeaderBackgroundColor(guiHeaderColor[guiColorSwitch]);
+    gui.setDefaultFillColor(guiFillColor[guiColorSwitch]);
+    guiColorSwitch = 1 - guiColorSwitch;
+    gui.add(kinectParameters);
+    
+    
     visualizeParameters.setName("visualizers");
-    visualizeParameters.add(showObstacle.set("show obstacle", true));
     visualizeParameters.add(showScalar.set("show scalar", true));
     visualizeParameters.add(displayScalarScale.set("scalar scale", 0.15, 0.05, 0.5));
     displayScalarScale.addListener(this, &ofApp::setDisplayScalarScale);
@@ -141,21 +183,53 @@ void ofApp::setupGui() {
 //--------------------------------------------------------------
 void ofApp::update(){
     
+    kinect.update();
+    
     deltaTime = ofGetElapsedTimef() - lastTime;
     lastTime = ofGetElapsedTimef();
     
-    simpleCam.update();
-    
-    if (simpleCam.isFrameNew()) {
+    if (kinect.isFrameNew()) {
+
+        // Load grayscale depth image from the kinect source
+        grayImage.setFromPixels(kinect.getDepthPixels(), kinect.width, kinect.height, OF_IMAGE_GRAYSCALE);
+        
+        // Threshold image
+        threshold(grayImage, grayThreshNear, nearThreshold, true);
+        threshold(grayImage, grayThreshFar, farThreshold);
+        
+        // Convert to CV to perform AND operation
+        Mat grayThreshNearMat = toCv(grayThreshNear);
+        Mat grayThreshFarMat = toCv(grayThreshFar);
+        Mat grayImageMat = toCv(grayImage);
+        
+        // cvAnd to get the pixels which are a union of the two thresholds
+        bitwise_and(grayThreshNearMat, grayThreshFarMat, grayImageMat);
+        
+        // Save pre-processed image for drawing it
+        grayPreprocImage = grayImage;
+        
+        // Process image
+        dilate(grayImage);
+        dilate(grayImage);
+        //erode(grayImage);
+        
+        // Mark image as changed
+        grayImage.update();
+        
+        // Find contours
+        //contourFinder.setThreshold(ofMap(mouseX, 0, ofGetWidth(), 0, 255));
+        contourFinder.findContours(grayImage);
+        
         ofPushStyle();
         ofEnableBlendMode(OF_BLENDMODE_DISABLED);
         cameraFbo.begin();
-        
+        ofSetColor(ofColor::white);
         if (doFlipCamera)
-            simpleCam.draw(cameraFbo.getWidth(), 0, -cameraFbo.getWidth(), cameraFbo.getHeight());  // Flip Horizontal
+            kinect.drawDepth(cameraFbo.getWidth(), 0, -cameraFbo.getWidth(), cameraFbo.getHeight());  // Flip Horizontal
         else
-            simpleCam.draw(0, 0, cameraFbo.getWidth(), cameraFbo.getHeight());
+            kinect.drawDepth(0, 0, cameraFbo.getWidth(), cameraFbo.getHeight());
         cameraFbo.end();
+        ofDisableBlendMode();
         ofPopStyle();
         
         opticalFlow.setSource(cameraFbo.getTexture());

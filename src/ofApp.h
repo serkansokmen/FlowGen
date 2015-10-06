@@ -2,11 +2,17 @@
 
 #include "ofMain.h"
 #include "ofxGui.h"
+#include "ofxCv.h"
+#include "ofxKinect.h"
 #include "ofxFlowTools.h"
 
-#define USE_PROGRAMMABLE_GL					// Maybe there is a reason you would want to
-#define USE_FASTER_INTERNAL_FORMATS			// about 15% faster but gives errors from ofGLUtils
 
+#define USE_PROGRAMMABLE_GL					// Maybe there is a reason you would want to
+#define USE_FASTER_INTERNAL_FORMATS			// About 15% faster but gives errors from ofGLUtils
+
+
+using namespace cv;
+using namespace ofxCv;
 using namespace flowTools;
 
 enum drawModeEnum{
@@ -34,8 +40,20 @@ public:
     void	 update();
     void	 draw();
     
-    // Camera
-    ofVideoGrabber		simpleCam;
+    // Kinect & ofxCv
+    ofxKinect           kinect;
+    ContourFinder       contourFinder;
+    ofParameterGroup    kinectParameters;
+    
+    ofImage colorImg;
+    ofImage grayImage;         // grayscale depth image
+    ofImage grayThreshNear;    // the near thresholded image
+    ofImage grayThreshFar;     // the far thresholded image
+    ofImage grayPreprocImage;  // grayscale pre-processed image
+    
+    ofParameter<int> nearThreshold;
+    ofParameter<int> farThreshold;
+    
     bool                didCamUpdate;
     ftFbo				cameraFbo;
     ofParameter<bool>	doFlipCamera;
