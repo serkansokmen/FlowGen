@@ -85,6 +85,7 @@ Desktop.ini
 
 # Ignore data folder
 bin/data/
+cloak/
 
 *.xml
 *.eps
